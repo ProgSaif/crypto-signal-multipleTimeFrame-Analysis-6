@@ -1,31 +1,40 @@
 import time
+import requests
 import pandas as pd
-from binance.client import Client
 
 from config import TOP_COINS, SCAN_INTERVAL
 from signals import generate_signal
 from telegram_bot import send_signal
 
 
-client = Client()
+BINANCE_URL = "https://api.binance.com/api/v3/klines"
 
 
-def get_klines(symbol, interval, limit=200):
+def get_klines(symbol, interval="5m", limit=200):
 
-    klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
+    params = {
+        "symbol":symbol,
+        "interval":interval,
+        "limit":limit
+    }
 
-    df = pd.DataFrame(klines, columns=[
-        "time","open","high","low","close","volume",
-        "close_time","qav","trades","tbbav","tbqav","ignore"
-    ])
+    r = requests.get(BINANCE_URL, params=params, timeout=10)
 
-    df["close"] = df["close"].astype(float)
-    df["volume"] = df["volume"].astype(float)
+    data = r.json()
+
+    df = pd.DataFrame(data)
+
+    df = df.iloc[:,:6]
+
+    df.columns=["time","open","high","low","close","volume"]
+
+    df["close"]=df["close"].astype(float)
+    df["volume"]=df["volume"].astype(float)
 
     return df
 
 
-print("🚀 AI Signal Bot Started")
+print("🚀 Railway Signal Bot Started")
 
 while True:
 
@@ -33,19 +42,24 @@ while True:
 
         try:
 
-            df_5m = get_klines(symbol,"5m")
-            df_1h = get_klines(symbol,"1h")
+            df5 = get_klines(symbol,"5m")
+            df1 = get_klines(symbol,"1h")
 
-            signal = generate_signal(df_5m, df_1h)
+            if df5["volume"].iloc[-1] < 1000:
+                continue
+
+            signal = generate_signal(df5,df1)
 
             if signal:
 
-                send_signal(symbol, signal)
+                send_signal(symbol,signal)
 
-                print(symbol, signal)
+                print(symbol,signal)
+
+            time.sleep(0.4)
 
         except Exception as e:
 
-            print(symbol, "error", e)
+            print(symbol,"error",e)
 
     time.sleep(SCAN_INTERVAL)
