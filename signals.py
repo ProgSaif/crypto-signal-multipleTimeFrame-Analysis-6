@@ -7,18 +7,18 @@ import numpy as np
 EMA_FAST = 9
 EMA_SLOW = 21
 RSI_PERIOD = 14
-PRICE_MOVE_THRESHOLD = 0.001      # 0.1% move
-VOLUME_MULTIPLIER = 0.2           # realistic spike detection
+PRICE_MOVE_THRESHOLD = 0.001
+VOLUME_MULTIPLIER = 0.2
 RSI_LONG_MAX = 90
 RSI_SHORT_MIN = 10
 CONFIDENCE_THRESHOLD = 50
 ATR_MULTIPLIER = 3
-MIN_DAILY_VOLUME = 0              # scan all coins
+MIN_DAILY_VOLUME = 0
 KLINE_LIMIT = 200
 
 # ===== Helper Functions =====
-def get_klines(symbol, interval="5m", limit=KLINE_LIMIT, retries=3):
-    url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+def get_klines(symbol, interval="1h", limit=KLINE_LIMIT, retries=3):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     for attempt in range(retries):
         try:
             resp = requests.get(url, timeout=10)
@@ -74,7 +74,6 @@ def detect_volume_spike(df, multiplier=VOLUME_MULTIPLIER):
     if avg_volume.empty or current_volume == 0: return False
     return current_volume > (avg_volume.iloc[-1] * multiplier)
 
-# ===== SIGNAL CALCULATION =====
 def calculate_signal(symbol, df, last_price, change_pct, daily_volume):
     if df is None or df.empty or len(df) < EMA_SLOW:
         reason = "insufficient kline data"
@@ -91,7 +90,6 @@ def calculate_signal(symbol, df, last_price, change_pct, daily_volume):
     atr_val = calculate_atr(df)
     vol_spike = detect_volume_spike(df)
 
-    # Debug print
     print(f"{symbol} -> RSI: {rsi_val}, Trend: {ema_trend}, VolumeSpike: {vol_spike}, Change: {change_pct:.4f}, Volume: {daily_volume}")
 
     trade_type = None
@@ -104,8 +102,7 @@ def calculate_signal(symbol, df, last_price, change_pct, daily_volume):
         print(f"{symbol} -> Signal: None (conditions not met)")
         return None
 
-    # TP/SL calculation
-    if atr_val is None: atr_val = last_price * 0.01  # fallback
+    if atr_val is None: atr_val = last_price * 0.01
     if trade_type == "LONG":
         entry = last_price
         sl = entry - atr_val * ATR_MULTIPLIER
@@ -119,7 +116,6 @@ def calculate_signal(symbol, df, last_price, change_pct, daily_volume):
         tp2 = entry - atr_val * ATR_MULTIPLIER * 2
         tp3 = entry - atr_val * ATR_MULTIPLIER * 3
 
-    # Confidence score
     score = int(abs(change_pct)*100) + (20 if vol_spike else 0) + (20 if ema_trend == ("up" if trade_type=="LONG" else "down") else 0)
     score = min(score, 100)
     if score < CONFIDENCE_THRESHOLD:
@@ -127,7 +123,7 @@ def calculate_signal(symbol, df, last_price, change_pct, daily_volume):
         return None
 
     return {
-        "coin": symbol.replace("USDT", ""),
+        "coin": symbol.replace("USDT",""),
         "entry": entry,
         "sl": sl,
         "tp1": tp1,
