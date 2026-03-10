@@ -1,6 +1,5 @@
 import pandas as pd
 
-
 def rsi(df, period=14):
 
     delta = df["close"].diff()
@@ -24,7 +23,4 @@ def volume_spike(df):
 
     avg = df["volume"].rolling(20).mean()
 
-    if df["volume"].iloc[-1] > avg.iloc[-1] * 1.5:
-        return True
-
-    return False
+    return df["volume"].iloc[-1] > avg.iloc[-1] * 1.5
