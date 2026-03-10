@@ -13,28 +13,44 @@ BINANCE_URL = "https://api.binance.com/api/v3/klines"
 def get_klines(symbol, interval="5m", limit=200):
 
     params = {
-        "symbol":symbol,
-        "interval":interval,
-        "limit":limit
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
     }
 
-    r = requests.get(BINANCE_URL, params=params, timeout=10)
+    try:
 
-    data = r.json()
+        r = requests.get(BINANCE_URL, params=params, timeout=10)
 
-    df = pd.DataFrame(data)
+        data = r.json()
 
-    df = df.iloc[:,:6]
+        if not isinstance(data, list):
+            print(symbol, "API error:", data)
+            return None
 
-    df.columns=["time","open","high","low","close","volume"]
+        if len(data) == 0:
+            return None
 
-    df["close"]=df["close"].astype(float)
-    df["volume"]=df["volume"].astype(float)
+        df = pd.DataFrame(data)
 
-    return df
+        df = df.iloc[:, :6]
+
+        df.columns = ["time","open","high","low","close","volume"]
+
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+
+        return df
+
+    except Exception as e:
+
+        print(symbol, "request error:", e)
+
+        return None
 
 
-print("🚀 Railway Signal Bot Started")
+print("🚀 Railway Crypto Signal Bot Started")
+
 
 while True:
 
@@ -42,24 +58,27 @@ while True:
 
         try:
 
-            df5 = get_klines(symbol,"5m")
-            df1 = get_klines(symbol,"1h")
+            df5 = get_klines(symbol, "5m")
+            df1 = get_klines(symbol, "1h")
+
+            if df5 is None or df1 is None:
+                continue
 
             if df5["volume"].iloc[-1] < 1000:
                 continue
 
-            signal = generate_signal(df5,df1)
+            signal = generate_signal(df5, df1)
 
             if signal:
 
-                send_signal(symbol,signal)
+                send_signal(symbol, signal)
 
-                print(symbol,signal)
+                print(symbol, signal)
 
             time.sleep(0.4)
 
         except Exception as e:
 
-            print(symbol,"error",e)
+            print(symbol, "error:", e)
 
     time.sleep(SCAN_INTERVAL)
