@@ -1,72 +1,76 @@
-import time
+# main.py
+import os
+import asyncio
+from telegram import Bot
+from dotenv import load_dotenv
+from signals import calculate_signal, get_klines
 import requests
-import pandas as pd
-from config import SCAN_INTERVAL, MIN_VOLUME
-from signals import generate_signal
-from telegram_bot import send_signal
 
-BINANCE_URL = "https://api.binance.us/api/v3"
+# ===== Load environment variables =====
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-def get_usdt_pairs():
-    try:
-        r = requests.get(f"{BINANCE_URL}/exchangeInfo", timeout=10)
-        data = r.json()
-        pairs = [s["symbol"] for s in data["symbols"]
-                 if s["quoteAsset"]=="USDT" and s["status"]=="TRADING"]
-        return pairs
-    except Exception as e:
-        print("Error fetching pairs:", e)
-        return []
+if not BOT_TOKEN or not CHANNEL_ID:
+    raise ValueError("BOT_TOKEN or CHANNEL_ID not set in .env")
 
-def get_klines(symbol, interval="5m", limit=200, retries=3):
-    for _ in range(retries):
+bot = Bot(token=BOT_TOKEN)
+posted = set()
+
+# ===== Safe send function with auto-delete =====
+async def send_message_safe(message, delete_after=3600):
+    for i in range(3):
         try:
-            params = {"symbol": symbol, "interval": interval, "limit": limit}
-            r = requests.get(f"{BINANCE_URL}/klines", params=params, timeout=10)
-            data = r.json()
-            if not isinstance(data, list) or len(data) < 2:
-                continue
-            df = pd.DataFrame(data, columns=[
-                "time","open","high","low","close","volume",
-                "close_time","quote_asset_volume","trades",
-                "taker_base","taker_quote","ignore"
-            ])
-            df = df[["time","open","high","low","close","volume"]]
-            df[["close","volume"]] = df[["close","volume"]].astype(float)
-            return df
+            msg = await bot.send_message(chat_id=CHANNEL_ID, text=message)
+            return
         except Exception as e:
-            print(f"{symbol} klines error: {e}")
-            time.sleep(1)
-    return None
+            print("Telegram send error:", e)
+            await asyncio.sleep(10)
 
-print("🚀 Railway Crypto Signal Bot Started")
-
-pairs = get_usdt_pairs()
-print("Total USDT pairs detected:", len(pairs))
-
-while True:
-    for symbol in pairs:
+# ===== Scanner loop =====
+async def scan_and_post():
+    print("🚀 ULTRA SCANNER BOT STARTED")
+    while True:
         try:
-            df5 = get_klines(symbol, "5m")
-            df1 = get_klines(symbol, "1h")
+            # 1️⃣ Get all USDT pairs
+            exchange_info = requests.get("https://api.binance.com/api/v3/exchangeInfo").json()
+            symbols = [s['symbol'] for s in exchange_info['symbols'] if s['symbol'].endswith("USDT")]
 
-            if df5 is None or df1 is None:
-                print(symbol, "skipped: insufficient data")
-                continue
+            print(f"Total pairs detected: {len(symbols)}")
 
-            if df5["volume"].iloc[-1] < MIN_VOLUME:
-                print(symbol, "skipped: low volume", df5["volume"].iloc[-1])
-                continue
+            for symbol in symbols:
+                # Get 1h candles
+                df = get_klines(symbol, interval="1h", limit=200)
+                if df is None: continue
 
-            signal = generate_signal(df5, df1)
-            print(symbol, "->", "Signal:", signal)
+                last_price = df["close"].iloc[-1]
+                change_pct = (last_price - df["close"].iloc[-2])/df["close"].iloc[-2] if len(df) > 1 else 0
+                daily_volume = df["volume"].sum()
 
-            if signal:
-                send_signal(symbol, signal)
+                signal = calculate_signal(symbol, df, last_price, change_pct, daily_volume)
+                if signal:
+                    key = f"{signal['coin']}_{signal['trade_type']}"
+                    if key not in posted:
+                        message = f"""
+💹 ${signal['coin']} – {signal['trade_type']}
 
-            time.sleep(0.25)  # avoid hitting rate limits
+Entry: {signal['entry']:.6f}
+SL: {signal['sl']:.6f}
+TP1: {signal['tp1']:.6f}
+TP2: {signal['tp2']:.6f}
+TP3: {signal['tp3']:.6f}
+
+Confidence: {signal['confidence']}%
+DYOR — Follow for updates
+"""
+                        await send_message_safe(message)
+                        posted.add(key)
+                        print(f"{symbol} -> Signal posted: {signal['trade_type']}")
 
         except Exception as e:
-            print(symbol, "error:", e)
+            print("Scanner loop error:", e)
 
-    time.sleep(SCAN_INTERVAL)
+        await asyncio.sleep(60)  # every minute
+
+# ===== Run bot =====
+asyncio.run(scan_and_post())
