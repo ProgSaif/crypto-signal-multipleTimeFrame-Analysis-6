@@ -1,70 +1,77 @@
-# main.py
 import os
 import asyncio
-import requests
 from telegram import Bot
+from scanner import scan_market, get_klines
+from poster import generate_signal_message
 from dotenv import load_dotenv
-from signals import calculate_signal, get_klines
+import requests
+import time
 
-# Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+
 if not BOT_TOKEN or not CHANNEL_ID:
-    raise ValueError("BOT_TOKEN or CHANNEL_ID not set in .env")
+    raise ValueError("Missing BOT_TOKEN or CHANNEL_ID in .env")
 
 bot = Bot(token=BOT_TOKEN)
-posted = set()
 
-async def send_message_safe(message):
-    for attempt in range(3):
+async def send_message_safe(message, delete_after=0):
+    for i in range(3):
         try:
-            await bot.send_message(chat_id=CHANNEL_ID, text=message)
+            msg = await bot.send_message(chat_id=CHANNEL_ID, text=message)
+            if delete_after>0:
+                asyncio.create_task(delete_after_delay(msg.message_id, delete_after))
             return
         except Exception as e:
-            print("Telegram send error:", e)
-            await asyncio.sleep(5)
+            print("Telegram error:", e)
+            await asyncio.sleep(15)
 
-async def scan_and_post():
-    print("🚀 ULTRA SCANNER BOT STARTED")
-    while True:
+async def delete_after_delay(message_id, delay):
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id=CHANNEL_ID, message_id=message_id)
+    except Exception as e:
+        print("Delete message failed:", e)
+
+def fetch_usdt_pairs():
+    for i in range(3):
         try:
-            # Fetch all USDT pairs automatically
-            exchange_info = requests.get("https://api.binance.com/api/v3/exchangeInfo").json()
-            symbols = [s['symbol'] for s in exchange_info['symbols'] if s['symbol'].endswith("USDT")]
-            print(f"Total pairs detected: {len(symbols)}")
-
-            for symbol in symbols:
-                df = get_klines(symbol, interval="1h", limit=200)
-                if df is None: continue
-
-                last_price = df["close"].iloc[-1]
-                change_pct = (last_price - df["close"].iloc[-2])/df["close"].iloc[-2] if len(df) > 1 else 0
-                daily_volume = df["volume"].sum()
-
-                signal = calculate_signal(symbol, df, last_price, change_pct, daily_volume)
-                if signal:
-                    key = f"{signal['coin']}_{signal['trade_type']}"
-                    if key not in posted:
-                        msg = f"""
-💹 ${signal['coin']} – {signal['trade_type']}
-
-Entry: {signal['entry']:.6f}
-SL: {signal['sl']:.6f}
-TP1: {signal['tp1']:.6f}
-TP2: {signal['tp2']:.6f}
-TP3: {signal['tp3']:.6f}
-
-Confidence: {signal['confidence']}%
-DYOR — Follow for updates
-"""
-                        await send_message_safe(msg)
-                        posted.add(key)
-                        print(f"{symbol} -> Signal posted: {signal['trade_type']}")
-
+            resp = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=10)
+            data = resp.json()
+            if 'symbols' not in data:
+                print("Exchange info missing 'symbols':", data)
+                time.sleep(5)
+                continue
+            usdt_pairs = [s['symbol'] for s in data['symbols'] if s['symbol'].endswith("USDT")]
+            return usdt_pairs
         except Exception as e:
-            print("Scanner loop error:", e)
+            print("Error fetching exchange info:", e)
+            time.sleep(5)
+    return []
 
-        await asyncio.sleep(60)
+async def run_bot():
+    print("🚀 ULTRA SCANNER BOT STARTED")
+    posted = set()
+    while True:
+        symbols = fetch_usdt_pairs()
+        if not symbols:
+            print("No symbols fetched, retrying in 60s...")
+            await asyncio.sleep(60)
+            continue
+        signals = scan_market(symbols)
+        for s in signals:
+            key = f"{s['coin']}_{s['trade_type']}"
+            if key not in posted:
+                msg = generate_signal_message(
+                    s['coin'], s['entry'], s['sl'], s['tp1'], s['tp2'], s['tp3'],
+                    s['trade_type'], s['confidence']
+                )
+                print("Posting:", s['coin'], s['trade_type'])
+                await send_message_safe(msg)
+                posted.add(key)
+                await asyncio.sleep(5)
+        print("Cycle completed. Waiting 30s for next scan...")
+        await asyncio.sleep(30)
 
-asyncio.run(scan_and_post())
+asyncio.run(run_bot())
