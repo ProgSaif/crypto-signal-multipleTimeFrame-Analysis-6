@@ -7,7 +7,7 @@ from signals import generate_signal
 from telegram_bot import send_signal
 
 
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_URL = "https://api.binance.us/api/v3/klines"
 
 
 def get_klines(symbol, interval="5m", limit=200):
